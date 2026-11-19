@@ -1,4 +1,4 @@
-name: bxt-conda-env
+name: xt-conda-env
 channels:
   - conda-forge
 dependencies:
