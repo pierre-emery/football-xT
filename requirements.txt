@@ -1,0 +1,15 @@
+numpy
+pandas>=2.0
+pyarrow
+matplotlib
+seaborn
+mplsoccer
+requests
+tqdm
+scipy
+statsbombpy
+ipywidgets
+ipykernel
+jupyterlab>=3.0.0
+pytest
+setuptools

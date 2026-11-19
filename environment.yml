@@ -1,0 +1,23 @@
+name: bxt-conda-env
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - pandas>=2.0
+  - pyarrow
+  - matplotlib
+  - seaborn
+  - requests
+  - tqdm
+  - scipy
+  - setuptools
+  - ipykernel
+  - ipywidgets
+  - jupyterlab>=3.0.0
+  - pytest
+  - ipdb
+  - pip
+  - pip:
+      - mplsoccer
+      - statsbombpy
