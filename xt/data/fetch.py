@@ -7,7 +7,7 @@ quick ad-hoc exploration.
 
 Typical use::
 
-    from bxt.data import load_competitions, load_matches, load_events
+    from xt.data import load_competitions, load_matches, load_events
 
     comps = load_competitions()
     matches = load_matches(competition_id=43, season_id=106)  # FIFA World Cup 2022
@@ -27,7 +27,7 @@ import requests
 
 BASE_URL = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
 
-# Repo root = two levels above this file (bxt/data/statsbomb.py -> repo/)
+# Repo root = two levels above this file (xt/data/fetch.py -> repo/)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE = Path(os.environ.get("BXT_DATA_DIR", REPO_ROOT / "data")) / "raw" / "statsbomb"
 

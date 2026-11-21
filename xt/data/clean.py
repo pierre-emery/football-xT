@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .statsbomb import REPO_ROOT, load_events, load_matches, download_events
+from .fetch import REPO_ROOT, load_events, load_matches, download_events
 
 PITCH_X, PITCH_Y = 120.0, 80.0
 
@@ -37,6 +37,85 @@ KEEP_TYPES = MOVE_TYPES + ("Shot", "Dispossessed", "Miscontrol", "Ball Recovery"
 SET_PIECE_PASS_TYPES = {"Corner", "Free Kick", "Throw-in", "Goal Kick", "Kick Off"}
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 
+GOAL_X, POST_Y1, POST_Y2 = 120.0, 36.0, 44.0   # goal line and posts in the StatsBomb frame
+FF_COLUMNS = ("ff_n_opp_triangle", "ff_gk_in_triangle", "ff_gk_dist_goal", "ff_gk_dist_shooter",
+              "ff_n_opp_close", "ff_visible_angle", "ff_visible_frac")
+
+
+def _in_triangle(p, a, b, c):
+    """True if point p is inside triangle (a, b, c) (sign of the three cross products)."""
+    def cross(o, u, v):
+        return (u[0] - o[0]) * (v[1] - o[1]) - (u[1] - o[1]) * (v[0] - o[0])
+    d1, d2, d3 = cross(p, a, b), cross(p, b, c), cross(p, c, a)
+    neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+    return not (neg and pos)
+
+
+def shot_freeze_frame_features(loc, freeze_frame, close_radius: float = 2.0,
+                               body_half_width: float = 0.5, gk_half_width: float = 1.0) -> dict:
+    """Features of the defensive situation at a shot, from its StatsBomb freeze frame.
+
+    * ff_n_opp_triangle: opponents (goalkeeper excluded) inside the triangle shooter-posts;
+    * ff_gk_in_triangle: the goalkeeper is inside that triangle;
+    * ff_gk_dist_goal / ff_gk_dist_shooter: goalkeeper distance to the goal centre / to the shooter;
+    * ff_n_opp_close: opponents within close_radius units of the shooter (pressure);
+    * ff_visible_angle (degrees) and ff_visible_frac: part of the goal opening angle not hidden
+      by opponents in front of the ball. Each opponent hides an angular interval of half-width
+      atan(half_width / distance). Same spirit as the Kos angle (Hassani & Lotfi), not their formula.
+    Returns NaN features if there is no freeze frame.
+    """
+    out = dict.fromkeys(FF_COLUMNS, np.nan)
+    if not freeze_frame or loc is None or len(loc) < 2:
+        return out
+    x, y = float(loc[0]), float(loc[1])
+    p1, p2 = (GOAL_X, POST_Y1), (GOAL_X, POST_Y2)
+    a1 = np.arctan2(POST_Y1 - y, GOAL_X - x)
+    a2 = np.arctan2(POST_Y2 - y, GOAL_X - x)
+    lo, hi = min(a1, a2), max(a1, a2)
+
+    n_tri, n_close, gk, blocked = 0, 0, None, []
+    for pl in freeze_frame:
+        if pl.get("teammate", False):
+            continue
+        qx, qy = pl["location"][:2]
+        is_gk = (pl.get("position") or {}).get("name") == "Goalkeeper"
+        d = float(np.hypot(qx - x, qy - y))
+        if is_gk:
+            gk = (qx, qy, d)
+        elif _in_triangle((qx, qy), (x, y), p1, p2):
+            n_tri += 1
+        if d <= close_radius:
+            n_close += 1
+        if qx > x and d > 0:   # only players in front of the ball can hide the goal
+            aq = np.arctan2(qy - y, qx - x)
+            w = np.arctan((gk_half_width if is_gk else body_half_width) / d)
+            blocked.append((max(aq - w, lo), min(aq + w, hi)))
+
+    # length of the union of the blocked intervals inside [lo, hi]
+    blocked = sorted(iv for iv in blocked if iv[1] > iv[0])
+    covered, cur_lo, cur_hi = 0.0, None, None
+    for b_lo, b_hi in blocked:
+        if cur_hi is None or b_lo > cur_hi:
+            if cur_hi is not None:
+                covered += cur_hi - cur_lo
+            cur_lo, cur_hi = b_lo, b_hi
+        else:
+            cur_hi = max(cur_hi, b_hi)
+    if cur_hi is not None:
+        covered += cur_hi - cur_lo
+
+    total = hi - lo
+    out.update({
+        "ff_n_opp_triangle": n_tri,
+        "ff_gk_in_triangle": float(gk is not None and _in_triangle(gk[:2], (x, y), p1, p2)),
+        "ff_gk_dist_goal": np.hypot(gk[0] - GOAL_X, gk[1] - (POST_Y1 + POST_Y2) / 2) if gk else np.nan,
+        "ff_gk_dist_shooter": gk[2] if gk else np.nan,
+        "ff_n_opp_close": n_close,
+        "ff_visible_angle": np.degrees(max(total - covered, 0.0)),
+        "ff_visible_frac": max(total - covered, 0.0) / total if total > 0 else np.nan,
+    })
+    return out
 
 def _name(d, key):
     v = d.get(key)
@@ -79,6 +158,9 @@ def events_to_actions(events: list[dict], match_id: int) -> pd.DataFrame:
             "pass_switch": False,
             "shot_xg": np.nan,
             "is_goal": False,
+            "shot_first_time": False,
+            "shot_technique": None,
+            **dict.fromkeys(FF_COLUMNS, np.nan),
         }
         if etype == "Pass":
             p = e["pass"]
@@ -103,6 +185,9 @@ def events_to_actions(events: list[dict], match_id: int) -> pd.DataFrame:
             row["body_part"] = _name(s, "body_part")
             row["shot_xg"] = s.get("statsbomb_xg", np.nan)
             row["is_goal"] = row["outcome"] == "Goal"
+            row["shot_first_time"] = bool(s.get("first_time", False))
+            row["shot_technique"] = _name(s, "technique")
+            row.update(shot_freeze_frame_features(e.get("location"), s.get("freeze_frame")))
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -189,7 +274,7 @@ def load_actions(pairs: list[tuple[int, int]], **kwargs) -> pd.DataFrame:
 
 
 __all__ = ["events_to_actions", "clean_actions", "build_actions", "load_actions", "PITCH_X", "PITCH_Y",
-           "MOVE_TYPES", "PROCESSED_DIR"]
+           "MOVE_TYPES", "PROCESSED_DIR", "shot_freeze_frame_features", "FF_COLUMNS"]
 
 
 if __name__ == "__main__":  # pragma: no cover

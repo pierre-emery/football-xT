@@ -6,13 +6,13 @@
 Avec conda :
 
     conda env create --file environment.yml
-    conda activate bxt-conda-env
+    conda activate xt-conda-env
     pip install -e .
-    python -m ipykernel install --user --name=bxt-conda-env
+    python -m ipykernel install --user --name=xt-conda-env
 
 Ou avec pip + virtualenv :
 
-    python -m venv ~/bxt-venv && source ~/bxt-venv/bin/activate
+    python -m venv ~/xt-venv && source ~/xt-venv/bin/activate
     pip install -r requirements.txt
     pip install -e .
 
